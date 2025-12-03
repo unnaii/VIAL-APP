@@ -11,9 +11,15 @@ import pystray
 import win32com.client
 import win32api, win32ui
 from pathlib import Path
+from pynput import keyboard
 
 CONFIG_FILE = "config.json"
 KEY_LABELS = [f"F{i}" for i in range(13, 25)]
+
+# Mapeo de teclas F13-F24 (los nombres de pynput pueden variar según el sistema/teclado)
+KEY_MAP_PNPUT = {
+    f'Key.f{i}': f'F{i}' for i in range(13, 25)
+}
 
 # =============================================
 # UTILIDADES
@@ -98,6 +104,21 @@ def set_startup(enable=True):
     except Exception as e:
         print("Error set_startup:", e)
 
+
+# =============================================
+# LANZAMIENTO DE PROGRAMAS
+# =============================================
+def launch_program(path):
+    """Lanza el programa en un nuevo proceso."""
+    try:
+        # Usar subprocess.Popen para no bloquear el hilo principal/listener
+        # Añadir shell=True ayuda a manejar mejor los accesos directos (.lnk)
+        subprocess.Popen([path], close_fds=True, shell=True)
+    except Exception as e:
+        print(f"Error al lanzar {path}: {e}")
+        # Opcional: Mostrar un error con messagebox.showerror(title="Error de Lanzamiento", message=f"No se pudo lanzar {path}.\nError: {e}")
+
+
 # =============================================
 # LANZADOR CUADRÍCULA
 # =============================================
@@ -135,14 +156,19 @@ class LaunchGridPage(ctk.CTkFrame):
         if icon_img:
             icon_label = ctk.CTkLabel(frame, image=icon_img, text="")
             icon_label.pack(pady=(6,2))
+        else:
+            # Espacio vacío si no hay icono
+            ctk.CTkLabel(frame, text="", height=48).pack(pady=(6,2))
+            
         label = ctk.CTkLabel(frame, text=key, font=("Segoe UI", 14, "bold"))
         label.pack(pady=2)
+        
         btn = ctk.CTkButton(
             frame,
-            text=os.path.basename(program_path).split(".")[0] if program_path else "",
+            text=os.path.basename(program_path).split(".")[0] if program_path else "Asignar Programa",
             width=70,
             height=70,
-            fg_color="#1e1e1e",
+            fg_color="#1e1e1e" if program_path else "#4CAF50", # Color diferente si no hay asignación
             command=lambda k=key: self.open_program_window(k)
         )
         btn.bind("<Button-3>", lambda e, k=key: self.unassign_callback(k))
@@ -152,7 +178,11 @@ class LaunchGridPage(ctk.CTkFrame):
     def update_button_name(self, key, path):
         btn = self.buttons.get(key)
         if btn:
-            btn.configure(text=os.path.basename(path).split(".")[0])
+            btn.configure(
+                text=os.path.basename(path).split(".")[0],
+                fg_color="#1e1e1e"
+            )
+
 
 # =============================================
 # VENTANA SELECCIÓN PROGRAMAS
@@ -256,7 +286,9 @@ class App(ctk.CTk):
         self.config_data = load_config()
         self.program_assignments = self.config_data.get("assignments", {})
         self.geometry("1000x500")
-        self.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
+        
+        # SÓLO se vincula para ocultar a la bandeja, NO para detener el listener.
+        self.protocol("WM_DELETE_WINDOW", self.hide_to_tray) 
 
         # Botones de navegación
         self.nav_frame = ctk.CTkFrame(self)
@@ -266,7 +298,7 @@ class App(ctk.CTk):
         self.config_btn = ctk.CTkButton(self.nav_frame, text="Configuración", command=self.show_config)
         self.config_btn.pack(side="left", padx=6, pady=6)
 
-        info_label = ctk.CTkLabel(self, text="click derecho para desconfigurar", font=("Segoe UI", 12), text_color="gray")
+        info_label = ctk.CTkLabel(self, text="Click derecho para desconfigurar un programa", font=("Segoe UI", 12), text_color="gray")
         info_label.pack(pady=(4,10))
 
         self.container = ctk.CTkFrame(self)
@@ -278,10 +310,44 @@ class App(ctk.CTk):
         self.config_page = ConfigPage(self.container, self.config_data, self.save_config)
         self.selected_key = None
         ctk.set_appearance_mode(self.config_data.get("appearance_mode","dark"))
+        
+        # Iniciar listener de teclado en un hilo
+        self.keyboard_listener = None
+        self.start_keyboard_listener()
 
         # Mostrar minimizado si corresponde
         if self.config_data.get("start_minimized", False):
             self.after(100, self.hide_to_tray)
+        
+    # Iniciar Listener
+    def start_keyboard_listener(self):
+        # Si ya hay un listener, lo detenemos y reiniciamos
+        if self.keyboard_listener:
+            self.keyboard_listener.stop()
+        
+        self.keyboard_listener = keyboard.Listener(on_press=self.on_key_press)
+        # Aseguramos que el hilo no sea detenido por el garbage collector
+        self.keyboard_listener_thread = threading.Thread(target=self.keyboard_listener.start, daemon=True)
+        self.keyboard_listener_thread.start()
+
+    # Manejar pulsación de tecla
+    def on_key_press(self, key):
+        try:
+            # Obtener la representación en string de la tecla pulsada (ej. 'Key.f13')
+            key_str = str(key)
+            
+            # Buscar en el mapeo, si es una tecla F13-F24, obtener el nombre 'F13', 'F14', etc.
+            key_label = KEY_MAP_PNPUT.get(key_str)
+
+            if key_label:
+                program_path = self.program_assignments.get(key_label)
+                if program_path:
+                    # Lanzar el programa
+                    launch_program(program_path)
+
+        except Exception as e:
+            # Manejar cualquier otro error, pero no detener el listener
+            print(f"Error en on_key_press: {e}")
 
     # Mostrar páginas
     def show_launcher(self):
@@ -328,6 +394,7 @@ class App(ctk.CTk):
         try:
             image = Image.open("app_icon.png")
         except FileNotFoundError:
+            # Crear un icono simple si no se encuentra el archivo
             image = Image.new("RGB", (64,64), "blue")
             draw = ImageDraw.Draw(image)
             draw.rectangle((0,0,64,64), fill="blue")
@@ -344,6 +411,9 @@ class App(ctk.CTk):
         self.deiconify()
 
     def quit_app(self, icon):
+        # Detener el detector de teclado SÓLO cuando se cierra la aplicación
+        if self.keyboard_listener:
+            self.keyboard_listener.stop() 
         icon.stop()
         self.destroy()
 
