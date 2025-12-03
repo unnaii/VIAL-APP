@@ -26,8 +26,8 @@ body.landing {
     min-height: 100vh;
 
     /* Fondo arco gradiente */
-    background: radial-gradient(circle at center, #1c1c1e 0%, #1c1c1e 50%, #4a90e2 52%, #6fc1ff 55%, #1c1c1e 56%, #1c1c1e 100%);
-    background-repeat: no-repeat;
+    background: #0d0d0d;
+    background: radial-gradient(circle, rgba(13, 13, 13, 1) 38%, rgba(0, 157, 255, 1) 44%, rgba(3, 177, 200, 1) 51%, rgba(6, 121, 136, 1) 60%, rgba(13, 13, 13, 1) 65%);
     background-size: cover;
 }
 
